@@ -1,4 +1,7 @@
+import asyncio
+import math
 
+from fastapi import WebSocket, WebSocketDisconnect
 from datetime import datetime, timezone
 from typing import List
 
@@ -270,3 +273,52 @@ def get_incidents():
 @app.get("/api/timeline")
 def get_timeline():
     return {"timeline": state["timeline"]}
+
+@app.websocket("/ws/telemetry")
+async def telemetry_stream(websocket: WebSocket):
+    await websocket.accept()
+    tick = 0
+
+    try:
+        while True:
+            tick += 1
+            live_nodes = {}
+
+            for index, (node_id, node) in enumerate(state["grid"].items()):
+                live_node = node.copy()
+
+                # Small deterministic telemetry fluctuations for the
+                # healthy simulated grid. Attack data remains unchanged.
+                if not node["compromised"] and not node["isolated"]:
+                    live_node["voltage"] = round(
+                        node["expected_voltage"]
+                        + 0.004 * math.sin(tick * 0.15 + index),
+                        3,
+                    )
+                    live_node["frequency"] = round(
+                        node["expected_frequency"]
+                        + 0.015 * math.sin(tick * 0.10 + index),
+                        3,
+                    )
+                    live_node["load"] = round(
+                        node["expected_load"]
+                        + 1.5 * math.sin(tick * 0.08 + index),
+                        2,
+                    )
+
+                live_nodes[node_id] = live_node
+
+            await websocket.send_json({
+                "timestamp": timestamp(),
+                "type": "telemetry_update",
+                "grid_status": "under_attack" if state["attack_active"] else "operational",
+                "attack_active": state["attack_active"],
+                "nodes": live_nodes,
+                "incidents": state["incidents"],
+                "last_detection": state["last_detection"],
+            })
+
+            await asyncio.sleep(1)
+
+    except WebSocketDisconnect:
+        print("GRIDSHIELD telemetry client disconnected")
