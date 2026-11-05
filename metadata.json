@@ -1,0 +1,6 @@
+{
+  "name": "GridShield Command",
+  "description": "High-assurance tactical defense HUD operations center for real-time microgrid digital twin telemetry, cyber threat interception, and SCADA resilience.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
