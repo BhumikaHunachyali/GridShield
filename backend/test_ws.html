@@ -1,0 +1,35 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+  <title>GRIDSHIELD Live Telemetry Test</title>
+</head>
+<body style="background:#080b12;color:#00e5ff;font-family:monospace;padding:24px">
+  <h2>GRIDSHIELD // LIVE TELEMETRY</h2>
+  <div id="status">Connecting...</div>
+  <pre id="output"></pre>
+
+  <script>
+    const socket = new WebSocket("ws://127.0.0.1:8000/ws/telemetry");
+
+    socket.onopen = () => {
+      document.getElementById("status").textContent = "CONNECTED";
+    };
+
+    socket.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      document.getElementById("output").textContent =
+        JSON.stringify(data, null, 2);
+    };
+
+    socket.onerror = () => {
+      document.getElementById("status").textContent = "CONNECTION ERROR";
+    };
+
+    socket.onclose = () => {
+      document.getElementById("status").textContent = "DISCONNECTED";
+    };
+  </script>
+</body>
+</html>
+

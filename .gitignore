@@ -6,3 +6,17 @@ coverage/
 *.log
 .env*
 !.env.example
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+
+# Node
+node_modules/
+dist/
+
+# Editors
+.DS_Store
+.vscode/
