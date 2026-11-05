@@ -1,10 +1,12 @@
 import asyncio
+import pandas as pd
 import math
-
+import joblib
+from pathlib import Path
 from fastapi import WebSocket, WebSocketDisconnect
 from datetime import datetime, timezone
 from typing import List
-
+import pandas as pd
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -65,6 +67,22 @@ state = {
     "last_detection": [],
     "attack_active": False,
 }
+
+
+# Load trained GRIDSHIELD ML detector
+MODEL_PATH = Path(__file__).resolve().parent / "models" / "gridshield_detector.joblib"
+
+try:
+    saved_artifact = joblib.load(MODEL_PATH)
+    ml_model = saved_artifact["model"]
+    ml_model_name = saved_artifact["model_name"]
+    ml_model_features = saved_artifact["features"]
+    ML_MODEL_LOADED = True
+except FileNotFoundError:
+    ml_model = None
+    ml_model_name = "unavailable"
+    ml_model_features = []
+    ML_MODEL_LOADED = False
 
 
 def log_event(event, details):
@@ -159,43 +177,114 @@ def launch_attack(request: AttackRequest):
     }
 
 
+
 @app.post("/api/detect")
 def detect_attack():
     detections = []
 
-    for node_id, node in state["grid"].items():
-        voltage_residual = abs(node["voltage"] - node["expected_voltage"])
-        frequency_residual = abs(node["frequency"] - node["expected_frequency"])
-        load_residual = abs(node["load"] - node["expected_load"])
+    node_type_map = {
+        "G-01": "generator",
+        "S-01": "solar",
+        "B-01": "battery",
+        "N-01": "substation",
+        "N-02": "residential",
+        "E-01": "industrial",
+        "W-01": "hospital",
+        "C-01": "campus",
+    }
 
-        # Transparent residual-based detector for this toy simulation.
-        score = round(
-            voltage_residual / 0.03
-            + frequency_residual / 0.10
-            + load_residual / 10.0,
-            2,
+    if not ML_MODEL_LOADED:
+        raise HTTPException(
+            status_code=503,
+            detail="Trained ML detector is not available.",
         )
-        is_anomaly = score >= 2.0 and not node["isolated"]
+
+    for node_id, node in state["grid"].items():
+        if node["isolated"]:
+            continue
+
+        voltage_residual = (
+            node["voltage"] - node["expected_voltage"]
+        )
+        frequency_residual = (
+            node["frequency"] - node["expected_frequency"]
+        )
+        load_residual = (
+            node["load"] - node["expected_load"]
+        )
+
+        voltage_deviation_pct = (
+            abs(voltage_residual)
+            / max(abs(node["expected_voltage"]), 1e-9)
+            * 100
+        )
+
+        features = {
+            "voltage": node["voltage"],
+            "frequency": node["frequency"],
+            "load": node["load"],
+            "expected_voltage": node["expected_voltage"],
+            "expected_frequency": node["expected_frequency"],
+            "expected_load": node["expected_load"],
+            "voltage_residual": voltage_residual,
+            "frequency_residual": frequency_residual,
+            "load_residual": load_residual,
+            "voltage_deviation_pct": voltage_deviation_pct,
+            "node_type": node_type_map[node_id],
+        }
+
+        input_df = pd.DataFrame(
+            [features],
+            columns=ml_model_features,
+        )
+
+        prediction = int(ml_model.predict(input_df)[0])
+        attack_probability = float(
+            ml_model.predict_proba(input_df)[0][1]
+        )
+
+        is_anomaly = (
+            prediction == 1 and attack_probability >= 0.50
+        )
 
         if is_anomaly:
             node["status"] = "compromised"
+            node["compromised"] = True
+
             detections.append({
                 "node_id": node_id,
                 "node_name": node["name"],
-                "anomaly_score": score,
-                "voltage_residual": round(voltage_residual, 3),
-                "confidence": min(0.99, round(0.70 + score * 0.05, 2)),
-                "reason": "Telemetry deviates from expected operating baseline",
+                "prediction": "FALSE_DATA_INJECTION",
+                "anomaly_score": round(
+                    attack_probability * 100, 2
+                ),
+                "voltage_residual": round(
+                    abs(voltage_residual), 4
+                ),
+                "frequency_residual": round(
+                    abs(frequency_residual), 4
+                ),
+                "load_residual": round(
+                    abs(load_residual), 4
+                ),
+                "confidence": round(attack_probability, 4),
+                "reason": (
+                    "Trained Random Forest classified telemetry "
+                    "as anomalous based on deviations from "
+                    "the expected operating baseline."
+                ),
             })
 
     state["last_detection"] = detections
+
     log_event(
         "AI_DETECTION",
-        f"Detector flagged {len(detections)} anomalous node(s).",
+        f"{ml_model_name} flagged {len(detections)} anomalous node(s).",
     )
 
     return {
-        "detector": "Residual-based anomaly detector",
+        "detector": f"GRIDSHIELD {ml_model_name}",
+        "model_version": "1.0.0",
         "flagged_count": len(detections),
         "detections": detections,
     }
